@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Service Status Board</title>
+  <style>
+    :root {
+      --bg: #050505;
+      --card: #101010;
+      --border: #2b2b2b;
+      --text: #f5f5f5;
+      --muted: #b8b8b8;
+      --good: #22c55e;
+      --warn: #f59e0b;
+      --bad: #ef4444;
+      --checking: #60a5fa;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      background: linear-gradient(180deg, #050505 0%, #0a0a0a 100%);
+      color: var(--text);
+      padding: 24px;
+    }
+
+    .wrap {
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+    }
+
+    .title {
+      font-size: 30px;
+      font-weight: 700;
+      letter-spacing: 0.4px;
+    }
+
+    .sub {
+      color: var(--muted);
+      font-size: 14px;
+      margin-top: 6px;
+    }
+
+    .actions {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    button {
+      background: #171717;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 14px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    button:hover {
+      border-color: #4a4a4a;
+    }
+
+    .meta {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 16px;
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 18px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+      min-height: 155px;
+    }
+
+    .top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .name {
+      font-size: 18px;
+      font-weight: 700;
+      line-height: 1.2;
+    }
+
+    .dot {
+      width: 14px;
+      height: 14px;
+      border-radius: 999px;
+      flex: 0 0 auto;
+      box-shadow: 0 0 12px currentColor;
+    }
+
+    .status {
+      font-size: 22px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    .desc {
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.45;
+      min-height: 40px;
+    }
+
+    .small {
+      margin-top: 14px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .healthy .dot, .healthy .status { color: var(--good); background: var(--good); }
+    .degraded .dot, .degraded .status { color: var(--warn); background: var(--warn); }
+    .down .dot, .down .status { color: var(--bad); background: var(--bad); }
+    .checking .dot, .checking .status { color: var(--checking); background: var(--checking); }
+
+    .legend {
+      margin-top: 18px;
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .legend .dot {
+      width: 10px;
+      height: 10px;
+      box-shadow: none;
+    }
+
+    .footer-note {
+      margin-top: 18px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    code {
+      color: #e5e5e5;
+      background: #141414;
+      padding: 2px 6px;
+      border-radius: 6px;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="header">
+      <div>
+        <div class="title">Service Status Board</div>
+        <div class="sub">Simple browser-based checks for public HTTP/HTTPS endpoints</div>
+      </div>
+      <div class="actions">
+        <button id="refreshBtn">Refresh now</button>
+        <div class="meta" id="lastUpdated">Last updated: never</div>
+      </div>
+    </div>
+
+    <div class="grid" id="statusGrid"></div>
+
+    <div class="legend">
+      <div class="legend-item"><span class="dot" style="background:#22c55e;color:#22c55e"></span> Healthy</div>
+      <div class="legend-item"><span class="dot" style="background:#f59e0b;color:#f59e0b"></span> Degraded / slow</div>
+      <div class="legend-item"><span class="dot" style="background:#ef4444;color:#ef4444"></span> Down / unreachable</div>
+      <div class="legend-item"><span class="dot" style="background:#60a5fa;color:#60a5fa"></span> Checking</div>
+    </div>
+
+    <div class="footer-note">
+      This page does <strong>HTTP/HTTPS reachability checks</strong>, not true ICMP ping. Browser-only monitoring is limited by cross-origin rules, so this works best with URLs that serve a normal public page or favicon. For internal apps or deeper health checks, swap the target URL to your own lightweight health endpoint such as <code>/health</code> or <code>/status</code>.
+    </div>
+  </div>
+
+  <script>
+    // Update these to match the services you want to check.
+    // Best results: use a public page or favicon URL for each service.
+    const services = [
+      {
+        name: 'Microsoft 365',
+        url: 'https://www.microsoft.com/favicon.ico',
+        label: 'Public reachability check'
+      },
+      {
+        name: 'Azure',
+        url: 'https://azure.microsoft.com/favicon.ico',
+        label: 'Public reachability check'
+      },
+      {
+        name: 'SharePoint',
+        url: 'https://www.microsoft.com/microsoft-365/sharepoint/collaboration',
+        label: 'Public reachability check'
+      },
+      {
+        name: 'Cloudflare DNS',
+        url: 'https://one.one.one.one/favicon.ico',
+        label: 'Public reachability check'
+      },
+      {
+        name: 'Service Desk',
+        url: 'https://example.com/favicon.ico',
+        label: 'Replace with your help desk URL'
+      },
+      {
+        name: 'Store VPN Portal',
+        url: 'https://example.com/health',
+        label: 'Replace with your real health endpoint'
+      }
+    ];
+
+    const CHECK_INTERVAL_MS = 60000;
+    const FAST_THRESHOLD_MS = 1200;
+    const SLOW_THRESHOLD_MS = 3500;
+
+    const grid = document.getElementById('statusGrid');
+    const lastUpdated = document.getElementById('lastUpdated');
+    const refreshBtn = document.getElementById('refreshBtn');
+
+    function renderCards() {
+      grid.innerHTML = '';
+      services.forEach((service, index) => {
+        const card = document.createElement('div');
+        card.className = 'card checking';
+        card.id = `card-${index}`;
+        card.innerHTML = `
+          <div class="top">
+            <div class="name">${service.name}</div>
+            <span class="dot"></span>
+          </div>
+          <div class="status" id="status-${index}">Checking</div>
+          <div class="desc" id="desc-${index}">${service.label}</div>
+          <div class="small" id="small-${index}">Target: ${service.url}</div>
+        `;
+        grid.appendChild(card);
+      });
+    }
+
+    function setCardState(index, state, message, ms) {
+      const card = document.getElementById(`card-${index}`);
+      const status = document.getElementById(`status-${index}`);
+      const desc = document.getElementById(`desc-${index}`);
+
+      card.classList.remove('healthy', 'degraded', 'down', 'checking');
+      card.classList.add(state);
+      status.textContent = message;
+
+      if (typeof ms === 'number') {
+        desc.textContent = `Response check completed in ${ms} ms.`;
+      } else {
+        desc.textContent = 'Unable to reach target endpoint.';
+      }
+    }
+
+    async function checkService(service, index) {
+      setCardState(index, 'checking', 'Checking');
+
+      const start = performance.now();
+
+      // We use an image request to avoid most CORS issues for simple reachability.
+      // Add a cache-buster so each refresh actually re-checks the service.
+      const urlWithBust = service.url + (service.url.includes('?') ? '&' : '?') + 'cb=' + Date.now();
+
+      return new Promise((resolve) => {
+        const img = new Image();
+        let finished = false;
+        const timeoutMs = 5000;
+
+        const done = (ok) => {
+          if (finished) return;
+          finished = true;
+          const ms = Math.round(performance.now() - start);
+
+          if (!ok) {
+            setCardState(index, 'down', 'Down');
+            return resolve();
+          }
+
+          if (ms <= FAST_THRESHOLD_MS) {
+            setCardState(index, 'healthy', 'Healthy', ms);
+          } else if (ms <= SLOW_THRESHOLD_MS) {
+            setCardState(index, 'degraded', 'Degraded', ms);
+          } else {
+            setCardState(index, 'down', 'Slow / timeout risk', ms);
+          }
+
+          resolve();
+        };
+
+        const timer = setTimeout(() => {
+          img.onload = null;
+          img.onerror = null;
+          done(false);
+        }, timeoutMs);
+
+        img.onload = () => {
+          clearTimeout(timer);
+          done(true);
+        };
+
+        img.onerror = () => {
+          clearTimeout(timer);
+          done(false);
+        };
+
+        img.src = urlWithBust;
+      });
+    }
+
+    async function refreshAll() {
+      await Promise.all(services.map((service, index) => checkService(service, index)));
+      lastUpdated.textContent = 'Last updated: ' + new Date().toLocaleString();
+    }
+
+    renderCards();
+    refreshAll();
+    setInterval(refreshAll, CHECK_INTERVAL_MS);
+    refreshBtn.addEventListener('click', refreshAll);
+  </script>
+</body>
+</html>
