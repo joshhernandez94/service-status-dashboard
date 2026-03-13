@@ -133,6 +133,7 @@
       margin-top: 14px;
       color: var(--muted);
       font-size: 12px;
+      word-break: break-all;
     }
 
     .healthy .dot, .healthy .status { color: var(--good); background: var(--good); }
@@ -181,7 +182,7 @@
     <div class="header">
       <div>
         <div class="title">Service Status Board</div>
-        <div class="sub">Simple browser-based checks for public HTTP/HTTPS endpoints</div>
+        <div class="sub">Browser-based HTTPS reachability checks for public service endpoints</div>
       </div>
       <div class="actions">
         <button id="refreshBtn">Refresh now</button>
@@ -194,59 +195,64 @@
     <div class="legend">
       <div class="legend-item"><span class="dot" style="background:#22c55e;color:#22c55e"></span> Healthy</div>
       <div class="legend-item"><span class="dot" style="background:#f59e0b;color:#f59e0b"></span> Degraded / slow</div>
-      <div class="legend-item"><span class="dot" style="background:#ef4444;color:#ef4444"></span> Down / unreachable</div>
+      <div class="legend-item"><span class="dot" style="background:#ef4444;color:#ef4444"></span> Down / timeout</div>
       <div class="legend-item"><span class="dot" style="background:#60a5fa;color:#60a5fa"></span> Checking</div>
     </div>
 
     <div class="footer-note">
-      This page does <strong>HTTP/HTTPS reachability checks</strong>, not true ICMP ping. Browser only monitoring is limited.
+      This page performs <strong>browser-based HTTP/HTTPS reachability checks</strong>.
+      It does not do true ICMP ping, a successful connection means the service endpoint was reachable from the browser before timeout.
     </div>
   </div>
 
   <script>
-    // Update these to match the services you want to check.
-    // Best results: use a public page or favicon URL for each service.
     const services = [
       {
-        name: 'Microsoft 365',
-        url: 'https://login.microsoftonline.com/common/discovery/instance',
-        label: 'Public reachability check'
+        name: "Microsoft 365 Login",
+        url: "https://login.microsoftonline.com/common/discovery/instance",
+        label: "Microsoft identity platform"
       },
       {
-        name: 'Azure',
-        url: 'https://management.azure.com',
-        label: 'Public reachability check'
+        name: "Azure Management",
+        url: "https://management.azure.com/",
+        label: "Azure control plane"
       },
       {
-        name: 'Google DNS',
-        url: 'https://dns.google/resolve?name=google.com',
-        label: 'Public reachability check'
+        name: "Google Connectivity",
+        url: "https://clients3.google.com/generate_204",
+        label: "Global internet connectivity test"
       },
       {
-        name: 'Cloudflare DNS',
-        url: 'https://cloudflare-dns.com/dns-query',
-        label: 'Public reachability check'
+        name: "Cloudflare Connectivity",
+        url: "https://1.1.1.1/cdn-cgi/trace",
+        label: "Cloudflare edge network reachability"
       },
       {
-        name: 'AWS',
-        url: 'https://sts.amazonaws.com',
-        label: 'PUblic reachability Check'
+        name: "AWS Status",
+        url: "https://sts.amazonaws.com/",
+        label: "AWS identity service"
+      },
+      {
+        name: "GitHub API",
+        url: "https://api.github.com/",
+        label: "Developer platform reachability"
       }
     ];
 
     const CHECK_INTERVAL_MS = 60000;
     const FAST_THRESHOLD_MS = 1200;
     const SLOW_THRESHOLD_MS = 3500;
+    const REQUEST_TIMEOUT_MS = 5000;
 
-    const grid = document.getElementById('statusGrid');
-    const lastUpdated = document.getElementById('lastUpdated');
-    const refreshBtn = document.getElementById('refreshBtn');
+    const grid = document.getElementById("statusGrid");
+    const lastUpdated = document.getElementById("lastUpdated");
+    const refreshBtn = document.getElementById("refreshBtn");
 
     function renderCards() {
-      grid.innerHTML = '';
+      grid.innerHTML = "";
       services.forEach((service, index) => {
-        const card = document.createElement('div');
-        card.className = 'card checking';
+        const card = document.createElement("div");
+        card.className = "card checking";
         card.id = `card-${index}`;
         card.innerHTML = `
           <div class="top">
@@ -261,86 +267,62 @@
       });
     }
 
-    function setCardState(index, state, message, ms) {
+    function setCardState(index, state, message, detailText) {
       const card = document.getElementById(`card-${index}`);
       const status = document.getElementById(`status-${index}`);
       const desc = document.getElementById(`desc-${index}`);
 
-      card.classList.remove('healthy', 'degraded', 'down', 'checking');
+      card.classList.remove("healthy", "degraded", "down", "checking");
       card.classList.add(state);
       status.textContent = message;
-
-      if (typeof ms === 'number') {
-        desc.textContent = `Response check completed in ${ms} ms.`;
-      } else {
-        desc.textContent = 'Unable to reach target endpoint.';
-      }
+      desc.textContent = detailText;
     }
 
     async function checkService(service, index) {
-      setCardState(index, 'checking', 'Checking');
+      setCardState(index, "checking", "Checking", service.label);
 
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
       const start = performance.now();
 
-      // We use an image request to avoid most CORS issues for simple reachability.
-      // Add a cache-buster so each refresh actually re-checks the service.
-      const urlWithBust = service.url + (service.url.includes('?') ? '&' : '?') + 'cb=' + Date.now();
+      try {
+        await fetch(service.url + (service.url.includes("?") ? "&" : "?") + "_ts=" + Date.now(), {
+          method: "GET",
+          mode: "no-cors",
+          cache: "no-store",
+          signal: controller.signal
+        });
 
-      return new Promise((resolve) => {
-        const img = new Image();
-        let finished = false;
-        const timeoutMs = 5000;
+        clearTimeout(timeoutId);
+        const ms = Math.round(performance.now() - start);
 
-        const done = (ok) => {
-          if (finished) return;
-          finished = true;
-          const ms = Math.round(performance.now() - start);
+        if (ms <= FAST_THRESHOLD_MS) {
+          setCardState(index, "healthy", "Healthy", `Endpoint reachable in ${ms} ms.`);
+        } else if (ms <= SLOW_THRESHOLD_MS) {
+          setCardState(index, "degraded", "Degraded", `Endpoint reachable but slower: ${ms} ms.`);
+        } else {
+          setCardState(index, "down", "Slow / timeout risk", `Endpoint responded slowly: ${ms} ms.`);
+        }
+      } catch (error) {
+        clearTimeout(timeoutId);
 
-          if (!ok) {
-            setCardState(index, 'down', 'Down');
-            return resolve();
-          }
-
-          if (ms <= FAST_THRESHOLD_MS) {
-            setCardState(index, 'healthy', 'Healthy', ms);
-          } else if (ms <= SLOW_THRESHOLD_MS) {
-            setCardState(index, 'degraded', 'Degraded', ms);
-          } else {
-            setCardState(index, 'down', 'Slow / timeout risk', ms);
-          }
-
-          resolve();
-        };
-
-        const timer = setTimeout(() => {
-          img.onload = null;
-          img.onerror = null;
-          done(false);
-        }, timeoutMs);
-
-        img.onload = () => {
-          clearTimeout(timer);
-          done(true);
-        };
-
-        img.onerror = () => {
-          clearTimeout(timer);
-          done(false);
-        };
-
-        img.src = urlWithBust;
-      });
+        if (error.name === "AbortError") {
+          setCardState(index, "down", "Down", `Timed out after ${REQUEST_TIMEOUT_MS} ms.`);
+        } else {
+          setCardState(index, "down", "Down", "Network request failed before the endpoint could be reached.");
+        }
+      }
     }
 
     async function refreshAll() {
       await Promise.all(services.map((service, index) => checkService(service, index)));
-      lastUpdated.textContent = 'Last updated: ' + new Date().toLocaleString();
+      lastUpdated.textContent = "Last updated: " + new Date().toLocaleString();
     }
 
     renderCards();
     refreshAll();
     setInterval(refreshAll, CHECK_INTERVAL_MS);
-    refreshBtn.addEventListener('click', refreshAll);
+    refreshBtn.addEventListener("click", refreshAll);
   </script>
 </body>
 </html>
